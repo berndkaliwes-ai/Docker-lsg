@@ -35,14 +35,12 @@ def upload_file():
                 upload_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                 file.save(upload_path)
 
-                # Process the audio file for Coqui TTS
-                # main.process_audio_file now handles creating the TTS_DATASET_DIR structure
-                result_metadata_path = main.process_audio_file(upload_path, app.config['RESULTS_FOLDER'])
+                result = main.process_audio_file(upload_path, app.config['RESULTS_FOLDER'])
                 
-                if result_metadata_path: # If processing was successful
+                if result["status"] == "success": # If processing was successful
                     processed_files_info.append({"name": filename, "status": "Processed"})
                 else:
-                    processed_files_info.append({"name": filename, "status": "Failed or Low Quality"})
+                    processed_files_info.append({"name": filename, "status": f"Failed: {result['message']}"})
 
         # After processing all files, create a single zip of the entire TTS dataset
         final_zip_path = main.create_zip_archive_of_tts_dataset(app.config['RESULTS_FOLDER'])

@@ -178,6 +178,7 @@ def save_metadata_for_coqui(segment_data, tts_dataset_base_dir):
 def process_audio_file(file_path, base_output_dir):
     """
     Führt den gesamten Verarbeitungsprozess für eine einzelne Audiodatei aus.
+    Gibt ein Dictionary mit dem Verarbeitungsstatus zurück.
     """
     original_filename = os.path.basename(file_path)
     original_filename_no_ext = os.path.splitext(original_filename)[0]
@@ -187,59 +188,32 @@ def process_audio_file(file_path, base_output_dir):
 
     converted_file = convert_to_wav(file_path)
     if not converted_file:
-        # If conversion fails, create a minimal entry in a separate error CSV or log it
-        # For now, we'll just return None and let the calling function handle it.
         print(f"Skipping processing for {original_filename} due to conversion failure.")
-        return None
+        return {"status": "error", "message": "File conversion to WAV failed"}
 
     quality_metrics = analyze_quality(converted_file)
     
     error_messages = []
     if quality_metrics.get('snr_db', 100) < 20:
-        error_messages.append("Low SNR value")
+        error_messages.append(f"Low SNR ({quality_metrics.get('snr_db', 0):.2f}dB)")
     if quality_metrics.get('clipping_percentage', 0) > 1:
-        error_messages.append("Clipping detected")
+        error_messages.append(f"Clipping detected ({quality_metrics.get('clipping_percentage', 0):.2f}%)")
 
-    # If quality is too low, create a dummy segment data with error and save to a specific error CSV
+    # If quality is too low, return an error status
     if error_messages:
-        # Create a specific error CSV for this file, not in the main TTS dataset
-        error_output_dir = os.path.join(base_output_dir, "errors")
-        os.makedirs(error_output_dir, exist_ok=True)
-        error_csv_path = os.path.join(error_output_dir, f"{original_filename_no_ext}_errors.csv")
-        
-        error_data = [{
-            "original_filename": original_filename,
-            "segment_number": "",
-            "audio_file": "",
-            "transcript": "",
-            "start_time": "",
-            "end_time": "",
-            "duration": "",
-            "error": "; ".join(error_messages),
-            "clipping_percentage": quality_metrics.get('clipping_percentage', ''),
-            "snr_db": quality_metrics.get('snr_db', ''),
-            "dynamic_range_db": quality_metrics.get('dynamic_range_db', ''),
-            "spectral_centroid": quality_metrics.get('spectral_centroid', '')
-        }]
-        
-        fieldnames = [
-            "original_filename", "segment_number", "audio_file", "transcript", 
-            "start_time", "end_time", "duration", "error", 
-            "clipping_percentage", "snr_db", "dynamic_range_db", "spectral_centroid"
-        ]
-        with open(error_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerow({k: v for k, v in error_data[0].items() if k in fieldnames})
-
+        # Clean up the converted file if it was created
+        if converted_file != file_path and os.path.exists(converted_file):
+            os.remove(converted_file)
         print(f"Skipping processing for {original_filename} due to low quality: {error_messages}")
-        return None # Do not proceed with segmentation/transcription
+        return {"status": "error", "message": "; ".join(error_messages)}
 
     segments, wavs_output_dir = segment_audio(converted_file, original_filename_no_ext, base_output_dir)
     
     if not segments:
+        if converted_file != file_path and os.path.exists(converted_file):
+            os.remove(converted_file)
         print(f"No segments found for {original_filename}.")
-        return None
+        return {"status": "error", "message": "No voice segments detected"}
 
     for seg in segments:
         seg.update(quality_metrics)
@@ -251,7 +225,7 @@ def process_audio_file(file_path, base_output_dir):
     if converted_file != file_path and os.path.exists(converted_file):
         os.remove(converted_file)
 
-    return os.path.join(base_output_dir, METADATA_FILE) # Return path to metadata file for now
+    return {"status": "success", "path": os.path.join(base_output_dir, METADATA_FILE)}
 
 
 def create_zip_archive_of_tts_dataset(tts_dataset_base_dir):

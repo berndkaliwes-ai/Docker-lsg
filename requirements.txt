@@ -3,3 +3,5 @@ openai-whisper
 librosa
 soundfile
 Flask
+pytest
+pytest-cov
