@@ -12,6 +12,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY main.py .
+COPY app.py .
+COPY templates templates
+
+# Expose port
+EXPOSE 5000
 
 # Command to run the application
-CMD ["python", "main.py"]
+CMD ["python", "app.py"]

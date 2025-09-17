@@ -2,3 +2,4 @@ pydub
 openai-whisper
 librosa
 soundfile
+Flask

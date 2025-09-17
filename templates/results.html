@@ -1,0 +1,9 @@
+<!doctype html>
+<title>Ergebnisse</title>
+<h1>Verarbeitungsergebnisse</h1>
+<ul>
+{% for file in files %}
+    <li>{{ file.name }} - <a href="{{ file.result_zip }}">Download ZIP</a></li>
+{% endfor %}
+</ul>
+<a href="/">Weitere Dateien hochladen</a>
