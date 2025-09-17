@@ -3,6 +3,8 @@ import os
 import shutil
 import csv
 import whisper
+import librosa
+import numpy as np
 from pydub import AudioSegment
 from pydub.silence import split_on_silence
 from pydub.generators import Sine
@@ -25,13 +27,50 @@ def convert_to_wav(file_path):
         audio = AudioSegment.from_file(file_path, format=file_ext[1:])
         wav_path = f"{file_name}.wav"
         audio.export(wav_path, format="wav")
-        # In a docker env, the original file is the one we want to process
         if not os.getenv('DOCKER_ENV') == 'true':
             os.remove(file_path)
         return wav_path
     except Exception as e:
         print(f"Fehler bei der Konvertierung von '{file_path}': {e}")
         return None
+
+def analyze_quality(file_path):
+    """
+    Analysiert die Qualität einer Audiodatei.
+    """
+    quality_metrics = {}
+    try:
+        y, sr = librosa.load(file_path, sr=None)
+
+        # Clipping detection
+        clipped_samples = np.sum(np.abs(y) >= 0.99)
+        quality_metrics['clipping_percentage'] = (clipped_samples / len(y)) * 100
+
+        # SNR estimation
+        non_silent_intervals = librosa.effects.split(y, top_db=30)
+        if len(non_silent_intervals) > 0:
+            signal_parts = np.concatenate([y[start:end] for start, end in non_silent_intervals])
+            silent_mask = np.ones(len(y), dtype=bool)
+            for start, end in non_silent_intervals:
+                silent_mask[start:end] = False
+            noise_parts = y[silent_mask]
+            if len(noise_parts) > 0:
+                power_signal = np.mean(signal_parts**2)
+                power_noise = np.mean(noise_parts**2)
+                if power_noise > 0:
+                    quality_metrics['snr_db'] = 10 * np.log10(power_signal / power_noise)
+        
+        # Dynamic range
+        S_db = librosa.amplitude_to_db(np.abs(librosa.stft(y)), ref=np.max)
+        quality_metrics['dynamic_range_db'] = np.max(S_db) - np.min(S_db)
+
+        # Spectral centroid
+        quality_metrics['spectral_centroid'] = np.mean(librosa.feature.spectral_centroid(y=y, sr=sr))
+
+    except Exception as e:
+        print(f"Fehler bei der Qualitätsanalyse von '{file_path}': {e}")
+    
+    return quality_metrics
 
 def segment_audio(file_path, base_output_dir):
     """
@@ -69,7 +108,11 @@ def segment_audio(file_path, base_output_dir):
             "end_time": end_time,
             "duration": len(segment) / 1000.0,
             "transcript": "",
-            "error": ""
+            "error": "",
+            "clipping_percentage": None,
+            "snr_db": None,
+            "dynamic_range_db": None,
+            "spectral_centroid": None
         })
     return segment_data, output_dir
 
@@ -91,8 +134,8 @@ def save_to_csv(segment_data, output_dir):
         return None
     
     csv_file_path = os.path.join(output_dir, "transcript.csv")
+    fieldnames = ["original_filename", "segment_number", "audio_file", "transcript", "start_time", "end_time", "duration", "error", "clipping_percentage", "snr_db", "dynamic_range_db", "spectral_centroid"]
     with open(csv_file_path, 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ["original_filename", "segment_number", "audio_file", "transcript", "start_time", "end_time", "duration", "error"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(segment_data)
@@ -115,32 +158,33 @@ if __name__ == '__main__':
     if is_docker and os.path.exists(RESULTS_DIR) and os.path.isdir(RESULTS_DIR):
         base_output_dir = RESULTS_DIR
 
-    # In docker, we expect the files to be in the /app directory
     test_file = "test.mp3"
-    if is_docker:
-        # We could look for any audio file in the /app directory
-        # For now, we just create the test file for demonstration
-        if not os.path.exists(test_file):
-            tone1 = Sine(440).to_audio_segment(duration=500)
-            silence1 = AudioSegment.silent(duration=1000)
-            tone2 = Sine(660).to_audio_segment(duration=500)
-            test_audio = tone1 + silence1 + tone2
-            test_audio.export(test_file, format="mp3")
-    else:
-        if not os.path.exists(test_file):
-            tone1 = Sine(440).to_audio_segment(duration=500)
-            silence1 = AudioSegment.silent(duration=1000)
-            tone2 = Sine(660).to_audio_segment(duration=500)
-            test_audio = tone1 + silence1 + tone2
-            test_audio.export(test_file, format="mp3")
+    if not os.path.exists(test_file):
+        tone1 = Sine(440).to_audio_segment(duration=500)
+        silence1 = AudioSegment.silent(duration=1000)
+        tone2 = Sine(660).to_audio_segment(duration=500)
+        test_audio = tone1 + silence1 + tone2
+        test_audio.export(test_file, format="mp3")
 
     converted_file = convert_to_wav(test_file)
 
     zip_file = None
     output_dir = None
     if converted_file:
+        quality_metrics = analyze_quality(converted_file)
+        print(f"\n--- Qualitätsanalyse ---")
+        print(quality_metrics)
+        print("------------------------")
+
         segments, output_dir = segment_audio(converted_file, base_output_dir)
         if segments:
+            for seg in segments:
+                seg.update(quality_metrics)
+                if quality_metrics.get('snr_db') and quality_metrics['snr_db'] < 20:
+                    seg['error'] += "Niedriger SNR-Wert; "
+                if quality_metrics.get('clipping_percentage') and quality_metrics['clipping_percentage'] > 1:
+                    seg['error'] += "Clipping erkannt; "
+
             transcribed_segments = transcribe_audio(segments)
             csv_file = save_to_csv(transcribed_segments, output_dir)
             if csv_file:
