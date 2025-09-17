@@ -4,12 +4,13 @@ from werkzeug.utils import secure_filename
 import main
 
 UPLOAD_FOLDER = 'uploads'
-RESULTS_FOLDER = 'results'
+# RESULTS_FOLDER is now managed by main.py's TTS_DATASET_DIR
+
 ALLOWED_EXTENSIONS = {'opus', 'mp3', 'wav', 'm4a', 'aac', 'flac'}
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['RESULTS_FOLDER'] = RESULTS_FOLDER
+app.config['RESULTS_FOLDER'] = main.TTS_DATASET_DIR # Use the TTS_DATASET_DIR from main.py
 
 def allowed_file(filename):
     return '.' in filename and \
@@ -24,31 +25,36 @@ def upload_file():
         if not files:
             return redirect(request.url)
         
-        processed_files = []
+        # Ensure upload folder exists
+        os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+        processed_files_info = []
         for file in files:
             if file and allowed_file(file.filename):
                 filename = secure_filename(file.filename)
                 upload_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-                if not os.path.exists(app.config['UPLOAD_FOLDER']):
-                    os.makedirs(app.config['UPLOAD_FOLDER'])
                 file.save(upload_path)
 
-                results_path = os.path.join(app.config['RESULTS_FOLDER'])
-                if not os.path.exists(results_path):
-                    os.makedirs(results_path)
+                # Process the audio file for Coqui TTS
+                # main.process_audio_file now handles creating the TTS_DATASET_DIR structure
+                result_metadata_path = main.process_audio_file(upload_path, app.config['RESULTS_FOLDER'])
+                
+                if result_metadata_path: # If processing was successful
+                    processed_files_info.append({"name": filename, "status": "Processed"})
+                else:
+                    processed_files_info.append({"name": filename, "status": "Failed or Low Quality"})
 
-                result_zip = main.process_audio_file(upload_path, results_path)
-                if result_zip:
-                    processed_files.append({"name": filename, "result_zip": os.path.basename(result_zip)})
-
-        return render_template('results.html', files=processed_files)
+        # After processing all files, create a single zip of the entire TTS dataset
+        final_zip_path = main.create_zip_archive_of_tts_dataset(app.config['RESULTS_FOLDER'])
+        
+        return render_template('results.html', files=processed_files_info, final_zip=os.path.basename(final_zip_path) if final_zip_path else None)
 
     return render_template('index.html')
 
 @app.route('/results/<filename>')
 def download_file(filename):
-    return send_from_directory(app.config['RESULTS_FOLDER'], filename)
+    # This route now serves the single TTS dataset zip file
+    return send_from_directory(os.path.dirname(app.config['RESULTS_FOLDER']), filename)
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)
-

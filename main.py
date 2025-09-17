@@ -6,26 +6,65 @@ import librosa
 import numpy as np
 from pydub import AudioSegment
 from pydub.silence import split_on_silence
+import re
+import string # Import the string module
+
+# Ensure ffmpeg is in PATH or explicitly set
+# AudioSegment.converter = "/usr/bin/ffmpeg" # Not needed if ffmpeg is in PATH
 
 SUPPORTED_FORMATS = [".opus", ".mp3", ".wav", ".m4a", ".aac", ".flac"]
+TTS_DATASET_DIR = "results/tts_dataset"
+WAVS_SUBDIR = "wavs"
+METADATA_FILE = "metadata.txt"
 
-def convert_to_wav(file_path):
+def clean_transcription(text):
     """
-    Konvertiert eine Audiodatei in das .wav-Format, wenn sie in den unterstützten Formaten vorliegt.
+    Reinigt den transkribierten Text für TTS-Training:
+    - Entfernt Satzzeichen.
+    - Schreibt Zahlen als Wörter aus (rudimentär).
+    """
+    # Remove punctuation using string.punctuation
+    text = text.translate(str.maketrans('', '', string.punctuation))
+    text = text.replace('-', ' ') # Replace hyphens with spaces
+    text = text.strip()
+    
+    # Basic number to word conversion (can be expanded)
+    num_word_map = {
+        '0': 'null', '1': 'eins', '2': 'zwei', '3': 'drei', '4': 'vier', 
+        '5': 'fünf', '6': 'sechs', '7': 'sieben', '8': 'acht', '9': 'neun'
+    }
+    for num, word in num_word_map.items():
+        text = text.replace(num, word)
+
+    return text.lower()
+
+def convert_to_wav(file_path, target_sr=16000):
+    """
+    Konvertiert eine Audiodatei in das .wav-Format und resampelt sie auf die Ziel-Samplerate.
     """
     file_name, file_ext = os.path.splitext(file_path)
     if file_ext.lower() not in SUPPORTED_FORMATS:
         print(f"Fehler: Dateiformat '{file_ext}' wird nicht unterstützt.")
         return None
-    if file_ext.lower() == ".wav":
-        return file_path
+    
     try:
         audio = AudioSegment.from_file(file_path, format=file_ext[1:])
+        
+        # Resample if necessary
+        if audio.frame_rate != target_sr:
+            audio = audio.set_frame_rate(target_sr)
+        
+        # Ensure mono channel
+        if audio.channels != 1:
+            audio = audio.set_channels(1)
+
         wav_path = f"{file_name}.wav"
         audio.export(wav_path, format="wav")
         return wav_path
     except Exception as e:
         print(f"Fehler bei der Konvertierung von '{file_path}': {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def analyze_quality(file_path):
@@ -67,19 +106,16 @@ def analyze_quality(file_path):
         print(f"Fehler bei der Qualitätsanalyse von '{file_path}': {e}")
     return quality_metrics
 
-def segment_audio(file_path, original_filename, base_output_dir):
+def segment_audio(file_path, original_filename_no_ext, base_output_dir):
     """
     Segmentiert eine .wav-Audiodatei anhand von Stillen und speichert die Segmente.
+    Segmente werden in einem globalen WAVS_SUBDIR gespeichert.
     """
     if not file_path or not file_path.lower().endswith(".wav"):
         return [], None
 
-    file_name_no_ext = os.path.splitext(original_filename)[0]
-    output_dir = os.path.join(base_output_dir, file_name_no_ext)
-    
-    if os.path.exists(output_dir):
-        shutil.rmtree(output_dir)
-    os.makedirs(output_dir)
+    wavs_output_dir = os.path.join(base_output_dir, WAVS_SUBDIR)
+    os.makedirs(wavs_output_dir, exist_ok=True)
 
     audio = AudioSegment.from_wav(file_path)
     segments = split_on_silence(audio, min_silence_len=500, silence_thresh=audio.dBFS-14, keep_silence=250)
@@ -88,8 +124,9 @@ def segment_audio(file_path, original_filename, base_output_dir):
     total_duration = 0
     for i, segment in enumerate(segments):
         segment_number = i + 1
-        segment_file_name = f"segment_{segment_number}.wav"
-        segment_path = os.path.join(output_dir, segment_file_name)
+        # Create a unique filename for each segment across all original files
+        segment_file_name = f"{original_filename_no_ext}_segment_{segment_number:04d}.wav"
+        segment_path = os.path.join(wavs_output_dir, segment_file_name)
         segment.export(segment_path, format="wav")
         
         start_time = total_duration / 1000.0
@@ -97,16 +134,17 @@ def segment_audio(file_path, original_filename, base_output_dir):
         total_duration += len(segment)
         
         segment_data.append({
-            "original_filename": original_filename,
+            "original_filename": os.path.basename(file_path), # This is the converted WAV path
+            "segment_filename": segment_file_name, # This is the filename for metadata.txt
             "segment_number": segment_number,
-            "audio_file": segment_path,
+            "audio_file_path": segment_path, # Full path to the segment file
             "start_time": start_time,
             "end_time": end_time,
             "duration": len(segment) / 1000.0,
             "transcript": "",
             "error": "",
         })
-    return segment_data, output_dir
+    return segment_data, wavs_output_dir
 
 def transcribe_audio(segment_data):
     """
@@ -114,9 +152,9 @@ def transcribe_audio(segment_data):
     """
     model = whisper.load_model("base")
     for segment in segment_data:
-        if os.path.exists(segment["audio_file"]):
+        if os.path.exists(segment["audio_file_path"]):
             try:
-                result = model.transcribe(segment["audio_file"])
+                result = model.transcribe(segment["audio_file_path"])
                 segment["transcript"] = result["text"]
             except Exception as e:
                 segment["error"] += f"Transcription failed: {e}; "
@@ -124,61 +162,35 @@ def transcribe_audio(segment_data):
             segment["error"] += "Audio file not found; "
     return segment_data
 
-def save_to_csv(segment_data, output_dir):
+def save_metadata_for_coqui(segment_data, tts_dataset_base_dir):
     """
-    Speichert die Segmentdaten in einer CSV-Datei.
+    Speichert die Segmentdaten im Coqui TTS-Format (metadata.txt).
     """
-    if not segment_data:
-        return None
+    metadata_file_path = os.path.join(tts_dataset_base_dir, METADATA_FILE)
     
-    csv_file_path = os.path.join(output_dir, "transcript.csv")
-    
-    fieldnames = [
-        "original_filename", "segment_number", "audio_file", "transcript", 
-        "start_time", "end_time", "duration", "error", 
-        "clipping_percentage", "snr_db", "dynamic_range_db", "spectral_centroid"
-    ]
-    
-    with open(csv_file_path, 'w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        
+    with open(metadata_file_path, 'a', newline='', encoding='utf-8') as f:
         for segment in segment_data:
-            # Ensure all keys are present before writing
-            row = {key: segment.get(key, "") for key in fieldnames}
-            writer.writerow(row)
-            
-    return csv_file_path
-
-def create_zip_archive(output_dir):
-    """
-    Erstellt ein ZIP-Archiv aus dem angegebenen Verzeichnis.
-    """
-    if not output_dir or not os.path.exists(output_dir):
-        return None
-    
-    zip_file_path = f"{output_dir}.zip"
-    shutil.make_archive(os.path.splitext(zip_file_path)[0], 'zip', output_dir)
-    return zip_file_path
+            cleaned_transcript = clean_transcription(segment["transcript"])
+            line = f"{segment['segment_filename']}|{cleaned_transcript}\n"
+            f.write(line)
+    return metadata_file_path
 
 def process_audio_file(file_path, base_output_dir):
     """
     Führt den gesamten Verarbeitungsprozess für eine einzelne Audiodatei aus.
     """
     original_filename = os.path.basename(file_path)
-    file_name_no_ext = os.path.splitext(original_filename)[0]
-    output_dir = os.path.join(base_output_dir, file_name_no_ext)
-
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    original_filename_no_ext = os.path.splitext(original_filename)[0]
+    
+    # Ensure the base TTS dataset directory exists
+    os.makedirs(base_output_dir, exist_ok=True)
 
     converted_file = convert_to_wav(file_path)
     if not converted_file:
-        error_data = [{
-            "original_filename": original_filename, "error": "File conversion failed.",
-        }]
-        save_to_csv(error_data, output_dir)
-        return create_zip_archive(output_dir)
+        # If conversion fails, create a minimal entry in a separate error CSV or log it
+        # For now, we'll just return None and let the calling function handle it.
+        print(f"Skipping processing for {original_filename} due to conversion failure.")
+        return None
 
     quality_metrics = analyze_quality(converted_file)
     
@@ -188,41 +200,80 @@ def process_audio_file(file_path, base_output_dir):
     if quality_metrics.get('clipping_percentage', 0) > 1:
         error_messages.append("Clipping detected")
 
+    # If quality is too low, create a dummy segment data with error and save to a specific error CSV
     if error_messages:
+        # Create a specific error CSV for this file, not in the main TTS dataset
+        error_output_dir = os.path.join(base_output_dir, "errors")
+        os.makedirs(error_output_dir, exist_ok=True)
+        error_csv_path = os.path.join(error_output_dir, f"{original_filename_no_ext}_errors.csv")
+        
         error_data = [{
             "original_filename": original_filename,
+            "segment_number": "",
+            "audio_file": "",
+            "transcript": "",
+            "start_time": "",
+            "end_time": "",
+            "duration": "",
             "error": "; ".join(error_messages),
-            **quality_metrics
+            "clipping_percentage": quality_metrics.get('clipping_percentage', ''),
+            "snr_db": quality_metrics.get('snr_db', ''),
+            "dynamic_range_db": quality_metrics.get('dynamic_range_db', ''),
+            "spectral_centroid": quality_metrics.get('spectral_centroid', '')
         }]
-        save_to_csv(error_data, output_dir)
-        return create_zip_archive(output_dir)
+        
+        fieldnames = [
+            "original_filename", "segment_number", "audio_file", "transcript", 
+            "start_time", "end_time", "duration", "error", 
+            "clipping_percentage", "snr_db", "dynamic_range_db", "spectral_centroid"
+        ]
+        with open(error_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerow({k: v for k, v in error_data[0].items() if k in fieldnames})
 
-    segments, segment_output_dir = segment_audio(converted_file, original_filename, base_output_dir)
+        print(f"Skipping processing for {original_filename} due to low quality: {error_messages}")
+        return None # Do not proceed with segmentation/transcription
+
+    segments, wavs_output_dir = segment_audio(converted_file, original_filename_no_ext, base_output_dir)
     
     if not segments:
-        error_data = [{
-            "original_filename": original_filename,
-            "error": "No segments found.",
-            **quality_metrics
-        }]
-        save_to_csv(error_data, segment_output_dir or output_dir)
-        return create_zip_archive(segment_output_dir or output_dir)
+        print(f"No segments found for {original_filename}.")
+        return None
 
     for seg in segments:
         seg.update(quality_metrics)
 
     transcribed_segments = transcribe_audio(segments)
-    save_to_csv(transcribed_segments, segment_output_dir)
+    save_metadata_for_coqui(transcribed_segments, base_output_dir)
     
-    return create_zip_archive(segment_output_dir)
+    # Clean up the converted_file if it's not the original
+    if converted_file != file_path and os.path.exists(converted_file):
+        os.remove(converted_file)
+
+    return os.path.join(base_output_dir, METADATA_FILE) # Return path to metadata file for now
+
+
+def create_zip_archive_of_tts_dataset(tts_dataset_base_dir):
+    """
+    Erstellt ein ZIP-Archiv des gesamten TTS-Datasets.
+    """
+    if not os.path.exists(tts_dataset_base_dir):
+        return None
+    
+    zip_file_path = f"{tts_dataset_base_dir}.zip"
+    shutil.make_archive(tts_dataset_base_dir, 'zip', tts_dataset_base_dir)
+    return zip_file_path
+
 
 if __name__ == '__main__':
     import sys
     if len(sys.argv) > 1:
         file_to_process = sys.argv[1]
-        results_dir = 'results'
-        if not os.path.exists(results_dir):
-            os.makedirs(results_dir)
-        process_audio_file(file_to_process, results_dir)
+        # For standalone execution, process into a temporary TTS dataset structure
+        temp_tts_dir = "temp_tts_dataset"
+        os.makedirs(temp_tts_dir, exist_ok=True)
+        process_audio_file(file_to_process, temp_tts_dir)
+        create_zip_archive_of_tts_dataset(temp_tts_dir)
     else:
         print("Bitte geben Sie den Pfad zur Audiodatei an.")

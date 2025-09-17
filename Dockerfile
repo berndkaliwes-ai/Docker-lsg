@@ -1,7 +1,13 @@
 FROM python:3.10-slim
 
-# Install ffmpeg
-RUN apt-get update && apt-get install -y ffmpeg && apt-get clean
+# Install dependencies for downloading and extracting ffmpeg
+RUN apt-get update && apt-get install -y curl tar xz-utils && apt-get clean
+
+# Download and install a static ffmpeg build
+RUN curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o ffmpeg.tar.xz && \
+    tar -xf ffmpeg.tar.xz && \
+    mv ffmpeg-*-amd64-static/ffmpeg /usr/bin/ffmpeg && \
+    rm -rf ffmpeg.tar.xz ffmpeg-*-amd64-static
 
 # Set working directory
 WORKDIR /app

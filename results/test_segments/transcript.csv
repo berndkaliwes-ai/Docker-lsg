@@ -1,3 +1,0 @@
-original_filename,segment_number,audio_file,transcript,start_time,end_time,duration,error,clipping_percentage,snr_db,dynamic_range_db,spectral_centroid
-test.wav,1,/app/results/test_segments/segment_1.wav,,0.0,0.741,0.741,,0.0,,80.0,352.0619222011593
-test.wav,2,/app/results/test_segments/segment_2.wav,,0.741,1.481,0.74,,0.0,,80.0,352.0619222011593
