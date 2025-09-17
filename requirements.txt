@@ -1,2 +1,4 @@
 pydub
 openai-whisper
+librosa
+soundfile

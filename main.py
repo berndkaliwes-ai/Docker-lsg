@@ -8,6 +8,7 @@ from pydub.silence import split_on_silence
 from pydub.generators import Sine
 
 SUPPORTED_FORMATS = [".opus", ".mp3", ".wav", ".m4a", ".aac", ".flac"]
+RESULTS_DIR = "/app/results"
 
 def convert_to_wav(file_path):
     """
@@ -24,13 +25,15 @@ def convert_to_wav(file_path):
         audio = AudioSegment.from_file(file_path, format=file_ext[1:])
         wav_path = f"{file_name}.wav"
         audio.export(wav_path, format="wav")
-        os.remove(file_path)
+        # In a docker env, the original file is the one we want to process
+        if not os.getenv('DOCKER_ENV') == 'true':
+            os.remove(file_path)
         return wav_path
     except Exception as e:
         print(f"Fehler bei der Konvertierung von '{file_path}': {e}")
         return None
 
-def segment_audio(file_path):
+def segment_audio(file_path, base_output_dir):
     """
     Segmentiert eine .wav-Audiodatei anhand von Stillen und speichert die Segmente.
     """
@@ -38,7 +41,7 @@ def segment_audio(file_path):
         return [], None
 
     file_name = os.path.splitext(os.path.basename(file_path))[0]
-    output_dir = f"{file_name}_segments"
+    output_dir = os.path.join(base_output_dir, f"{file_name}_segments")
     if os.path.exists(output_dir):
         shutil.rmtree(output_dir)
     os.makedirs(output_dir)
@@ -95,19 +98,48 @@ def save_to_csv(segment_data, output_dir):
         writer.writerows(segment_data)
     return csv_file_path
 
+def create_zip_archive(output_dir):
+    """
+    Erstellt ein ZIP-Archiv aus dem angegebenen Verzeichnis.
+    """
+    if not output_dir or not os.path.exists(output_dir):
+        return None
+    
+    zip_file_path = f"{output_dir}.zip"
+    shutil.make_archive(os.path.splitext(zip_file_path)[0], 'zip', output_dir)
+    return zip_file_path
+
 if __name__ == '__main__':
+    is_docker = os.getenv('DOCKER_ENV') == 'true'
+    base_output_dir = "."
+    if is_docker and os.path.exists(RESULTS_DIR) and os.path.isdir(RESULTS_DIR):
+        base_output_dir = RESULTS_DIR
+
+    # In docker, we expect the files to be in the /app directory
     test_file = "test.mp3"
-    if not os.path.exists(test_file):
-        tone1 = Sine(440).to_audio_segment(duration=500)
-        silence1 = AudioSegment.silent(duration=1000)
-        tone2 = Sine(660).to_audio_segment(duration=500)
-        test_audio = tone1 + silence1 + tone2
-        test_audio.export(test_file, format="mp3")
+    if is_docker:
+        # We could look for any audio file in the /app directory
+        # For now, we just create the test file for demonstration
+        if not os.path.exists(test_file):
+            tone1 = Sine(440).to_audio_segment(duration=500)
+            silence1 = AudioSegment.silent(duration=1000)
+            tone2 = Sine(660).to_audio_segment(duration=500)
+            test_audio = tone1 + silence1 + tone2
+            test_audio.export(test_file, format="mp3")
+    else:
+        if not os.path.exists(test_file):
+            tone1 = Sine(440).to_audio_segment(duration=500)
+            silence1 = AudioSegment.silent(duration=1000)
+            tone2 = Sine(660).to_audio_segment(duration=500)
+            test_audio = tone1 + silence1 + tone2
+            test_audio.export(test_file, format="mp3")
 
     converted_file = convert_to_wav(test_file)
 
+    zip_file = None
+    output_dir = None
     if converted_file:
-        segments, output_dir = segment_audio(converted_file)
+        segments, output_dir = segment_audio(converted_file, base_output_dir)
         if segments:
             transcribed_segments = transcribe_audio(segments)
             csv_file = save_to_csv(transcribed_segments, output_dir)
@@ -116,11 +148,18 @@ if __name__ == '__main__':
                 with open(csv_file, 'r', encoding='utf-8') as f:
                     print(f.read())
                 print("---------------------------------")
+            
+            zip_file = create_zip_archive(output_dir)
+            if zip_file:
+                print(f"\nZIP-Archiv erstellt: {zip_file}")
 
+    if not is_docker:
         print("\n--- Bereinigung ---")
         if os.path.exists(converted_file):
             os.remove(converted_file)
         if output_dir and os.path.exists(output_dir):
             shutil.rmtree(output_dir)
+        if zip_file and os.path.exists(zip_file):
+            os.remove(zip_file)
         print("--------------------")
 
