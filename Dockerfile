@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y curl tar xz-utils && apt-get clean
 RUN curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o ffmpeg.tar.xz && \
     tar -xf ffmpeg.tar.xz && \
     mv ffmpeg-*-amd64-static/ffmpeg /usr/bin/ffmpeg && \
+    mv ffmpeg-*-amd64-static/ffprobe /usr/bin/ffprobe && \
     rm -rf ffmpeg.tar.xz ffmpeg-*-amd64-static
 
 # Set working directory

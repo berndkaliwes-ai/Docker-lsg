@@ -30,12 +30,51 @@
                 <h1 class="h4 mb-0">Upload Your Voice Messages</h1>
             </div>
             <div class="card-body">
-                <p class="card-text">Select one or more audio files (.opus, .mp3, .wav, .m4a, .aac, .flac) to process.</p>
+                <p class="card-text">Select one or more audio files and choose the desired processing mode.</p>
                 <form method="post" enctype="multipart/form-data">
                     <div class="mb-3">
                         <label for="file" class="form-label">Choose files</label>
-                        <input class="form-control" type="file" id="file" name="file[]" multiple>
+                        <input class="form-control" type="file" id="file" name="file[]" multiple required>
                     </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">Processing Mode</label>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="processing_mode" id="mode_transcription" value="transcription" checked>
+                            <label class="form-check-label" for="mode_transcription">
+                                Standard Transcription (SNR > 20dB)
+                            </label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="processing_mode" id="mode_voice_cloning" value="voice_cloning">
+                            <label class="form-check-label" for="mode_voice_cloning">
+                                High Quality for Voice Cloning (SNR > 30dB)
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Segmentation Method</label>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="segmentation_mode" id="seg_silence" value="silence" checked>
+                            <label class="form-check-label" for="seg_silence">
+                                By Silence (fastest)
+                            </label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="segmentation_mode" id="seg_sentence" value="sentence">
+                            <label class="form-check-label" for="seg_sentence">
+                                By Sentence (slower, precise)
+                            </label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="segmentation_mode" id="seg_paragraph" value="paragraph">
+                            <label class="form-check-label" for="seg_paragraph">
+                                By Paragraph (groups sentences)
+                            </label>
+                        </div>
+                    </div>
+
                     <button type="submit" id="submit-button" class="btn btn-primary w-100">
                         <span id="button-text">Upload and Process</span>
                         <span id="loading-spinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
@@ -53,6 +92,11 @@
         const loadingSpinner = document.getElementById('loading-spinner');
 
         form.addEventListener('submit', () => {
+            // Basic check if files are selected
+            const fileInput = document.getElementById('file');
+            if (fileInput.files.length === 0) {
+                return; // Don't disable button if no files are selected
+            }
             submitButton.disabled = true;
             buttonText.textContent = 'Processing...';
             loadingSpinner.classList.remove('d-none');

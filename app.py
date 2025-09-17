@@ -21,11 +21,14 @@ def upload_file():
     if request.method == 'POST':
         if 'file[]' not in request.files:
             return redirect(request.url)
+        
         files = request.files.getlist('file[]')
-        if not files:
+        processing_mode = request.form.get('processing_mode', 'transcription')
+        segmentation_mode = request.form.get('segmentation_mode', 'silence')
+
+        if not files or files[0].filename == '':
             return redirect(request.url)
         
-        # Ensure upload folder exists
         os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
         processed_files_info = []
@@ -35,14 +38,18 @@ def upload_file():
                 upload_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                 file.save(upload_path)
 
-                result = main.process_audio_file(upload_path, app.config['RESULTS_FOLDER'])
+                result = main.process_audio_file(
+                    upload_path, 
+                    app.config['RESULTS_FOLDER'], 
+                    processing_mode, 
+                    segmentation_mode
+                )
                 
-                if result["status"] == "success": # If processing was successful
+                if result["status"] == "success":
                     processed_files_info.append({"name": filename, "status": "Processed"})
                 else:
                     processed_files_info.append({"name": filename, "status": f"Failed: {result['message']}"})
 
-        # After processing all files, create a single zip of the entire TTS dataset
         final_zip_path = main.create_zip_archive_of_tts_dataset(app.config['RESULTS_FOLDER'])
         
         return render_template('results.html', files=processed_files_info, final_zip=os.path.basename(final_zip_path) if final_zip_path else None)

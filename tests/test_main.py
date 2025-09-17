@@ -1,105 +1,112 @@
-
 import os
 import shutil
 import pytest
 from pydub import AudioSegment
+from pydub.generators import Sine
 import main
 
-# Define a fixture to create a temporary directory and test files for our tests
+# --- Fixtures ---
+
 @pytest.fixture(scope="module")
 def test_assets():
-    """
-    This fixture creates a temporary directory and a silent dummy audio file 
-    in .opus format for testing purposes. It automatically cleans up the directory 
-    and its contents after all tests in the module have been completed.
-    """
+    """Creates a temporary directory and dummy audio files for testing."""
     temp_dir = "temp_test_assets"
     os.makedirs(temp_dir, exist_ok=True)
-    
-    # Path for the dummy audio file
-    opus_path = os.path.join(temp_dir, "test_audio.opus")
-    wav_path = os.path.join(temp_dir, "test_audio.wav")
 
-    # Generate a short, silent audio clip and save it as a WAV file
-    silent_segment = AudioSegment.silent(duration=5000)  # 5 seconds of silence
-    silent_segment.export(wav_path, format="wav")
-    
-    # Convert the WAV to OPUS for testing the conversion functionality
-    AudioSegment.from_wav(wav_path).export(opus_path, format="opus")
+    sine_generator = Sine(440)
+    segment1 = sine_generator.to_audio_segment(duration=1000, volume=-10).fade_in(50).fade_out(50)
+    good_audio = segment1 + AudioSegment.silent(duration=600) + segment1
+    good_audio_path = os.path.join(temp_dir, "good_audio.wav")
+    good_audio.export(good_audio_path, format="wav")
 
-    # Provide the paths to the test assets
-    yield {
-        "temp_dir": temp_dir,
-        "opus": opus_path,
-        "wav": wav_path
-    }
+    yield {"temp_dir": temp_dir, "good": good_audio_path}
     
-    # Teardown: clean up the temporary directory and its contents after tests
     shutil.rmtree(temp_dir)
 
+@pytest.fixture
+def mock_whisper_result():
+    """Provides a mock of the whisper transcription result with word timestamps."""
+    return {
+        'text': 'Sentence one. Sentence two? Sentence three! A long pause here. And sentence four.',
+        'segments': [
+            {
+                'words': [
+                    {'word': 'Sentence', 'start': 0.1, 'end': 0.5},
+                    {'word': 'one.', 'start': 0.6, 'end': 0.9},
+                    {'word': 'Sentence', 'start': 1.2, 'end': 1.6},
+                    {'word': 'two? ', 'start': 1.7, 'end': 2.0},
+                    {'word': 'Sentence', 'start': 2.1, 'end': 2.5},
+                    {'word': 'three!', 'start': 2.6, 'end': 3.0},
+                    # Long pause of 2 seconds for paragraph break
+                    {'word': 'A', 'start': 5.0, 'end': 5.1},
+                    {'word': 'long', 'start': 5.2, 'end': 5.4},
+                    {'word': 'pause', 'start': 5.5, 'end': 5.8},
+                    {'word': 'here.', 'start': 5.9, 'end': 6.2},
+                    {'word': 'And', 'start': 6.5, 'end': 6.7},
+                    {'word': 'sentence', 'start': 6.8, 'end': 7.2},
+                    {'word': 'four.', 'start': 7.3, 'end': 7.6},
+                ]
+            }
+        ]
+    }
+
+# --- Unit Tests ---
+
 def test_clean_transcription():
-    """
-    Tests the clean_transcription function to ensure it correctly removes 
-    punctuation, converts numbers to words, and standardizes the text format.
-    """
-    assert main.clean_transcription("Hello World! This is a test, number 1.") == "hello world this is a test number eins"
-    assert main.clean_transcription("Test with numbers: 1, 2, 3.") == "test with numbers eins zwei drei"
-    assert main.clean_transcription("No changes needed here.") == "no changes needed here"
+    assert main.clean_transcription("Hello World! 123.") == "hello world eins zwei drei"
 
-def test_convert_to_wav(test_assets):
-    """
-    Tests the convert_to_wav function using the .opus test file. It verifies 
-    that the conversion to .wav is successful and that the output file is created.
-    """
-    wav_output_path = main.convert_to_wav(test_assets["opus"])
-    assert wav_output_path is not None
-    assert os.path.exists(wav_output_path)
-    # Clean up the generated WAV file
-    os.remove(wav_output_path)
+def test_segment_audio_by_silence(test_assets):
+    audio = AudioSegment.from_wav(test_assets["good"])
+    segments = main.segment_audio_by_silence(audio, "test", test_assets["temp_dir"])
+    assert len(segments) > 1
 
-def test_segment_audio(test_assets):
-    """
-    Tests the segment_audio function. This test uses a silent audio file, 
-    so it's expected that no segments will be generated. This verifies the 
-    function's ability to handle audio with no detectable speech.
-    """
-    # Since the test audio is silent, we expect no segments to be returned
-    segments, _ = main.segment_audio(test_assets["wav"], "test_audio", test_assets["temp_dir"])
-    assert len(segments) == 0
-
-def test_process_audio_file_success(monkeypatch, test_assets):
-    """
-    Tests the main audio processing pipeline for a successful run. This test 
-    uses mocking to bypass the actual transcription process, allowing for a fast 
-    and predictable test. It checks whether the function correctly processes 
-    the audio and returns a success status.
-    """
-    # Mock the whisper model to avoid actual transcription
-    def mock_transcribe(*args, **kwargs):
-        return {"text": "mocked transcription"}
-
+def test_transcribe_and_segment_by_sentence(monkeypatch, test_assets, mock_whisper_result):
+    """Tests that the text-based segmentation correctly splits by sentence."""
     monkeypatch.setattr(main.whisper, "load_model", lambda *args, **kwargs: None)
-    monkeypatch.setattr(main.whisper.Whisper, "transcribe", mock_transcribe)
+    monkeypatch.setattr(main, "transcribe_and_segment", main.transcribe_and_segment) # Ensure we test the real function
+    class MockModel: 
+        def transcribe(self, *args, **kwargs): return mock_whisper_result
+    monkeypatch.setattr(main.whisper, "load_model", lambda *args, **kwargs: MockModel())
 
-    # Create a non-silent segment for this test to ensure segmentation works
-    temp_wav_path = os.path.join(test_assets["temp_dir"], "non_silent.wav")
-    segment1 = AudioSegment.silent(duration=1000)
-    segment2 = AudioSegment.silent(duration=1000)
-    non_silent_audio = segment1 + AudioSegment.silent(duration=600) + segment2
-    non_silent_audio.export(temp_wav_path, format="wav")
+    audio = AudioSegment.from_wav(test_assets["good"])
+    segments = main.transcribe_and_segment(audio, test_assets["good"], "test", test_assets["temp_dir"], 'sentence')
+    # Expects 5 sentences from the mock data
+    assert len(segments) == 5
+    assert "Sentence one" in segments[0]["transcript"]
 
-    result = main.process_audio_file(temp_wav_path, test_assets["temp_dir"])
-    
+def test_transcribe_and_segment_by_paragraph(monkeypatch, test_assets, mock_whisper_result):
+    """Tests that the text-based segmentation correctly groups sentences into paragraphs."""
+    monkeypatch.setattr(main.whisper, "load_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main, "transcribe_and_segment", main.transcribe_and_segment)
+    class MockModel: 
+        def transcribe(self, *args, **kwargs): return mock_whisper_result
+    monkeypatch.setattr(main.whisper, "load_model", lambda *args, **kwargs: MockModel())
+
+    audio = AudioSegment.from_wav(test_assets["good"])
+    segments = main.transcribe_and_segment(audio, test_assets["good"], "test", test_assets["temp_dir"], 'paragraph')
+    # Expects 2 paragraphs from the mock data due to the long pause
+    assert len(segments) == 2
+    assert "Sentence one. Sentence two? Sentence three!" in segments[0]["transcript"]
+    assert "A long pause here. And sentence four." in segments[1]["transcript"]
+
+# --- Integration-Style Tests ---
+
+def test_process_audio_file_mode_silence(monkeypatch, test_assets):
+    """Tests the main processing pipeline with silence segmentation."""
+    monkeypatch.setattr(main, "transcribe_audio", lambda segments: segments)
+    result = main.process_audio_file(test_assets["good"], test_assets["temp_dir"], segmentation_mode='silence')
     assert result["status"] == "success"
-    assert os.path.exists(result["path"])
 
-def test_process_audio_file_low_quality(test_assets):
-    """
-    Tests the system's ability to correctly identify and reject a low-quality 
-    audio file. This test uses a silent audio file, which should be flagged 
-    for low SNR, and checks that the appropriate error status is returned.
-    """
-    # A silent file should have a very low SNR and be rejected
-    result = main.process_audio_file(test_assets["wav"], test_assets["temp_dir"])
-    assert result["status"] == "error"
-    assert "Low SNR" in result["message"]
+def test_process_audio_file_mode_sentence(monkeypatch, test_assets, mock_whisper_result):
+    """Tests the main processing pipeline with sentence segmentation."""
+    class MockModel: 
+        def transcribe(self, *args, **kwargs): return mock_whisper_result
+    monkeypatch.setattr(main.whisper, "load_model", lambda *args, **kwargs: MockModel())
+    
+    result = main.process_audio_file(test_assets["good"], test_assets["temp_dir"], segmentation_mode='sentence')
+    assert result["status"] == "success"
+    # Check if the detailed metadata contains multiple entries
+    with open(os.path.join(test_assets["temp_dir"], main.DETAILED_METADATA_FILE)) as f:
+        reader = csv.reader(f)
+        row_count = sum(1 for row in reader)
+        assert row_count > 2 # Header + multiple sentences

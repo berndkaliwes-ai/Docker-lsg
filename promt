@@ -88,37 +88,40 @@ Diese Anleitung ist so gestaltet, dass auch Laien sie umsetzen können. Jeder Sc
 
 
 
-### Schritt 7: Ergebnisse organisieren und speichern
+### Schritt 7: Ergebnisse für Coqui TTS organisieren und speichern
 
-- Lege für jede Eingabedatei einen separaten Ordner an, benannt nach dem Dateinamen ohne Endung
+- Lege eine einheitliche Ordnerstruktur für das gesamte Dataset an, z.B. `results/tts_dataset`.
 
-- Speichere in jedem Ordner:
+- Speichere alle erzeugten Audio-Segmente in einem Unterordner, z.B. `results/tts_dataset/wavs/`.
 
-- Die einzelnen Audiosegmente als `segment_01.wav`, `segment_02.wav`, …
-
-- Eine CSV-Datei mit allen Informationen für jedes Segment:
-
-- original_filename, segment_number, audio_file, transcript, start_time, end_time, duration, error (siehe unten Beispiel)
+- Erstelle eine primäre Metadaten-Datei (`metadata.txt`) im LJSpeech-Format. Dieses Format wird direkt von Coqui TTS für das Training verwendet.
 
 
 
-#### Beispielhafter CSV-Kopf:
+#### Beispielhafter Inhalt für `metadata.txt`:
 
-```csv
-
-original_filename,segment_number,audio_file,transcript,start_time,end_time,duration,error
-
-voice_001,1,segment_01.wav,"Dies ist ein Beispiel.",0.0,3.2,3.2,
-
-voice_001,2,segment_02.wav,"Noch ein Segment.",3.2,7.1,3.9,
-
+```
+dateiname_segment_0001.wav|Dies ist der transkribierte Text des ersten Segments.
+dateiname_segment_0002.wav|Und hier der Text des zweiten Segments.
 ```
 
 
 
-- Prüfe, dass alle Dateien und Daten korrekt angelegt und die Benennungen konsistent sind
+- Erstelle **zusätzlich** eine detailliertere `metadata_detailed.csv`-Datei für Analysezwecke. Diese enthält weitere Informationen wie Zeitstempel und Dauer.
 
-- Alle Fehler während der Verarbeitung werden in der `error`-Spalte dokumentiert (sonst bleibt sie leer)
+
+
+#### Beispielhafter Aufbau der `metadata_detailed.csv`:
+
+```csv
+segment_filename,transcript,start_time,end_time,duration,error
+segment_01.wav,"Dies ist ein Beispiel.",0.0,3.2,3.2,
+segment_02.wav,"Noch ein Segment.",3.2,7.1,3.9,
+```
+
+
+
+- Stelle sicher, dass alle Dateien und Daten korrekt angelegt und die Benennungen konsistent sind.
 
 
 

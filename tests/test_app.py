@@ -24,7 +24,7 @@ def test_index_page(client):
     """
     response = client.get('/')
     assert response.status_code == 200
-    assert b"Datei-Upload zur Audio-Verarbeitung" in response.data
+    assert b"Upload Your Voice Messages" in response.data
 
 def test_upload_success(client, monkeypatch):
     """
