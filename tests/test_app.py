@@ -5,15 +5,18 @@ import os
 import io
 
 @pytest.fixture
-def client():
+def client(tmp_path):
     """
     This fixture configures the Flask application for testing. It sets up a 
     test client that allows for making requests to the application without 
     running a live server. This is the standard way to test Flask applications.
     """
     flask_app.config['TESTING'] = True
-    # Ensure the upload folder exists for tests
+    # Use a temporary directory for uploads and results during testing
+    flask_app.config['UPLOAD_FOLDER'] = tmp_path / 'uploads'
+    flask_app.config['RESULTS_FOLDER'] = tmp_path / 'results'
     os.makedirs(flask_app.config['UPLOAD_FOLDER'], exist_ok=True)
+    os.makedirs(flask_app.config['RESULTS_FOLDER'], exist_ok=True)
     with flask_app.test_client() as client:
         yield client
 
@@ -25,6 +28,8 @@ def test_index_page(client):
     response = client.get('/')
     assert response.status_code == 200
     assert b"Upload Your Voice Messages" in response.data
+
+
 
 def test_upload_success(client, monkeypatch):
     """
@@ -78,3 +83,9 @@ def test_upload_no_file(client):
     response = client.post('/')
     # Expect a redirect back to the same page
     assert response.status_code == 302
+
+def test_upload_no_file_field(client):
+    """
+    Tests the scenario where the form is submitted without the 'file[]' field.
+    """
+    response = client.post('/')

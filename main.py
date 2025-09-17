@@ -105,7 +105,7 @@ def transcribe_and_segment(audio, audio_path, original_filename_no_ext, base_out
     for segment in transcription_result['segments']:
         for word in segment['words']:
             current_sentence.append(word)
-            if word['word'].strip().endswith(('.', '! ', '?')):
+            if word['word'].strip().endswith(('.', '!', '?')):
                 sentences.append(current_sentence)
                 current_sentence = []
     if current_sentence: # Add the last sentence if it doesn't end with punctuation
@@ -168,8 +168,9 @@ def save_metadata_for_coqui(segment_data, tts_dataset_base_dir):
 def save_detailed_metadata(segment_data, tts_dataset_base_dir):
     metadata_file_path = os.path.join(tts_dataset_base_dir, DETAILED_METADATA_FILE)
     file_exists = os.path.isfile(metadata_file_path)
+    print(f"DEBUG: save_detailed_metadata called with {len(segment_data)} segments. File exists: {file_exists}")
     with open(metadata_file_path, 'a', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['segment_filename', 'transcript', 'start_time', 'end_time', 'duration', 'error']
+        fieldnames = ['segment_filename', 'transcript', 'start_time', 'end_time', 'duration', 'error', 'snr_db', 'clipping_percentage']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         if not file_exists:
             writer.writeheader()

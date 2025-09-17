@@ -59,7 +59,7 @@ def upload_file():
 @app.route('/results/<filename>')
 def download_file(filename):
     # This route now serves the single TTS dataset zip file
-    return send_from_directory(os.path.dirname(app.config['RESULTS_FOLDER']), filename)
+    return send_from_directory(app.config['RESULTS_FOLDER'], filename)
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)
