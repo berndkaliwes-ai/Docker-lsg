@@ -1,143 +1,93 @@
 import os
-from flask import Flask, request, send_from_directory
-from redis import Redis, ConnectionPool, exceptions
+import uuid
+import shutil
+from flask import Flask, request, render_template, send_from_directory, url_for, session
+from werkzeug.utils import secure_filename
+import whisper
 
-# Import der neuen Audio-Bibliotheken
-import pydub
-import librosa
-import noisereduce as nr
-import scipy.signal
-import soundfile as sf
-import numpy as np
+# Wir importieren Ihre Verarbeitungslogik als Modul
+import main as audio_processor
 
-# Konfiguration (bleibt gleich)
+# --- Flask App Konfiguration ---
 class Config:
-    REDIS_HOST = os.environ.get('REDIS_HOST', 'localhost')
-    REDIS_PORT = int(os.environ.get('REDIS_PORT', 6379))
-    REDIS_DB = int(os.environ.get('REDIS_DB', 0))
-    REDIS_CONNECTION_POOL = ConnectionPool(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
-    UPLOAD_FOLDER = 'uploads'
-    PROCESSED_FOLDER = 'processed'
+    SECRET_KEY = os.urandom(24)
+    UPLOAD_FOLDER = 'user_uploads'
+    ALLOWED_EXTENSIONS = audio_processor.SUPPORTED_FORMATS
 
+app = Flask(__name__)
+app.config.from_object(Config)
+
+# Laden des Whisper-Modells (nur einmal beim Start)
+# WICHTIG: Das Herunterladen kann beim ersten Start dauern!
+print("Loading Whisper model...")
+model = whisper.load_model("base")
+print("Whisper model loaded.")
+
+def allowed_file(filename):
+    return '.' in filename and \
+           os.path.splitext(filename).lower() in app.config['ALLOWED_EXTENSIONS']
+audio_processor.py
 # ==============================================================================
-# Die Audio-Verarbeitungspipeline
+# ROUTE 1: Die Startseite mit dem Upload-Formular
 # ==============================================================================
-def enhance_audio_for_whisper(input_path, output_path):
-    """
-    Wendet eine Kette von Verbesserungen auf eine Audiodatei an, 
-    um sie für ein KI-Modell wie Whisper zu optimieren.
-    """
-    # Schritt 1 & 2: Laden und in Mono umwandeln mit pydub
-    audio_segment = pydub.AudioSegment.from_file(input_path).set_channels(1)
-    
-    # Schritt 3: Resampling auf 16kHz
-    audio_segment = audio_segment.set_frame_rate(16000)
-    
-    # Konvertierung zu numpy-Array für wissenschaftliche Verarbeitung
-    samples = np.array(audio_segment.get_array_of_samples()).astype(np.float32)
-    sample_rate = audio_segment.frame_rate
-
-    # Schritt 4: Hochpassfilter, um Rumpeln unter 100Hz zu entfernen
-    b, a = scipy.signal.butter(5, 100, btype='high', fs=sample_rate)
-    filtered_samples = scipy.signal.lfilter(b, a, samples)
-
-    # Schritt 5: Rauschunterdrückung
-    reduced_noise_samples = nr.reduce_noise(y=filtered_samples, sr=sample_rate)
-    
-    # Schritt 6: Stille am Anfang und Ende entfernen
-    trimmed_samples, _ = librosa.effects.trim(reduced_noise_samples, top_db=20)
-    
-    # Schritt 7: Normalisierung auf -1.0 dBFS Peak-Amplitude
-    # Wir wandeln zurück zu pydub, da es eine einfache Normalisierung bietet
-    normalized_segment = pydub.AudioSegment(
-        trimmed_samples.astype(np.int16).tobytes(), 
-        frame_rate=sample_rate,
-        sample_width=2, # 16-bit
-        channels=1
-    ).normalize()
-    
-    # Speichern der finalen, optimierten Datei
-    normalized_segment.export(output_path, format="wav")
-
-# ==============================================================================
-# Application Factory
-# ==============================================================================
-def create_app(config_class=Config):
-    app = Flask(__name__)
-    app.config.from_object(config_class)
-    app.redis_client = Redis(connection_pool=app.config['REDIS_CONNECTION_POOL'])
-
-    # Sicherstellen, dass die Ordner existieren
-    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-    os.makedirs(app.config['PROCESSED_FOLDER'], exist_ok=True)
-
-    @app.route('/')
-    def hello():
-        count = app.redis_client.incr('hits')
-        return f'Hello World! Counter: {count}. Use the /process-audio endpoint to enhance an audio file.\n'
-
-    @app.route('/process-audio', methods=['POST'])
-    def process_audio_endpoint():
-        if 'file' not in request.files:
-            return "Fehler: Keine Datei im Request gefunden.", 400
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    if request.method == 'POST':
+        # Eindeutige Session-ID erstellen, um Uploads zu gruppieren
+        session_id = str(uuid.uuid4())
+        session['session_id'] = session_id # Speichern in der User-Session
+        session_folder = os.path.join(app.config['UPLOAD_FOLDER'], session_id)
+        os.makedirs(session_folder, exist_ok=True)
         
-        file = request.files['file']
-        if file.filename == '':
-            return "Fehler: Keine Datei ausgewählt.", 400
+        uploaded_files = request.files.getlist('files')
+        if not uploaded_files or uploaded_files.filename == '':
+            return render_template('index.html', error="No files selected.")
 
-        if file:
-            input_filename = file.filename
-            input_path = os.path.join(app.config['UPLOAD_FOLDER'], input_filename)
-            file.save(input_path)
+        processing_results = []
+        for file in uploaded_files:
+            if file and allowed_file(file.filename):
+                original_filename = secure_filename(file.filename)
+                saved_path = os.path.join(session_folder, original_filename)
+                file.save(saved_path)
 
-            output_filename = f"processed_{os.path.splitext(input_filename)[0]}.wav"
-            output_path = os.path.join(app.config['PROCESSED_FOLDER'], output_filename)
+                # Aufruf Ihrer Verarbeitungsfunktion aus 
+                output_dir_for_session = os.path.join('results', session_id)
+                
+                result = audio_processor.process_audio_file(
+                    saved_path, 
+                    output_dir_for_session, 
+                    model
+                )
+                result['original_filename'] = original_filename
+                processing_results.append(result)
 
-            try:
-                enhance_audio_for_whisper(input_path, output_path)
-                return send_from_directory(app.config['PROCESSED_FOLDER'], output_filename, as_attachment=True)
-            except Exception as e:
-                app.logger.error(f"Fehler bei der Audioverarbeitung: {e}")
-                return "Fehler bei der Audioverarbeitung.", 500
+        # ZIP-Archiv für diese spezifische Session erstellen
+        final_zip_path = audio_processor.create_zip_archive_of_tts_dataset(output_dir_for_session)
+        final_zip_filename = os.path.basename(final_zip_path) if final_zip_path else None
+        
+        return render_template('results.html', 
+                               files=processing_results, 
+                               final_zip=final_zip_filename, 
+                               session_id=session_id)
 
-    return app
+    return render_template('index.html')
 
-# App-Start
-if __name__ == '__main__':
-    app = create_app()
-    app.run(host='0.0.0.0', port=5000)
-```
-
-### Schritt 3: Visualisierung der neuen Pipeline
-
-Um diese professionelle Pipeline zu verdeutlichen, hier eine Visualisierung des Ablaufs:
-
-```mermaid
-graph TD
-    A[Client sendet Audiodatei (MP3, WAV, etc.)] --> B{Flask Endpoint `/process-audio`}
+# ==============================================================================
+# ROUTE 2: Die Download-Route, jetzt korrekt implementiert
+# ==============================================================================
+@app.route('/downloads/<session_id>/<filename>')
+def download_file(session_id, filename):
+    # Der Pfad zum Download ist jetzt sicher und sessions-spezifisch
+    directory = os.path.join(os.getcwd(), 'results')
+    download_directory = os.path.join(directory, session_id)
     
-    subgraph "Audio-Verbesserungs-Pipeline"
-        direction LR
-        C[1. Laden & Umwandeln in Mono] -->
-        D[2. Resampling auf 16kHz] -->
-        E[3. Hochpassfilter] -->
-        F[4. Rauschunterdrückung] -->
-        G[5. Stille entfernen] -->
-        H[6. Normalisieren]
-    end
+    # Sicherheitscheck
+    safe_path = os.path.abspath(download_directory)
+    if not safe_path.startswith(os.path.abspath(directory)):
+        return "Access Denied", 403
 
-    B --> C
-    H --> I{Speichern als `processed_... .wav`}
-    I --> J[An Client als Download zurücksenden]
+    return send_from_directory(directory=safe_path, path=filename, as_attachment=True)
 
-    style A fill:#f9f,stroke:#333,stroke-width:2px
-    style J fill:#c8e6c9,stroke:#333,stroke-width:2px
-```
 
-### Zusammenfassung und nächste Schritte
-
-Sie haben jetzt ein komplettes, professionelles Setup:
-
-1.  **Infrastruktur:** Eine robuste Docker-Umgebung mit Flask und Redis.
-2.  **State-of-the-Art-Pipeline:** Eine Kette von Audio-Verbesserungen, die Ihre Audiodateien optimal für KI-Modelle wie Whisper vorbereitet.
-3.  **API-Endpunkt:** Einen funktionierenden Endpunkt, an den Sie Audiodateien per `POST`-Request senden und die optimierte Version als Antwort erhalten.
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
