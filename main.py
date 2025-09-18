@@ -18,18 +18,36 @@ DETAILED_METADATA_FILE = "metadata_detailed.csv"
 
 # --- Helper Functions ---
 
-def clean_transcription(text):
-    text = text.translate(str.maketrans('', '', string.punctuation))
+def clean_transcription(text, language='de'):
+    # Basic cleaning: remove punctuation and convert to lowercase
+    text = text.lower()
+    text = re.sub(r'[\\\'".,!?()\-\;: ]', '', text) # Fixed the unterminated string literal
+    text = re.sub(r'[^\w\s]', '', text) # Remove all punctuation
     text = text.replace('-', ' ')
-    text = text.strip()
-    num_word_map = {
-        '0': 'null', '1': 'eins', '2': 'zwei', '3': 'drei', '4': 'vier',
-        '5': 'fünf', '6': 'sechs', '7': 'sieben', '8': 'acht', '9': 'neun'
-    }
-    for num, word in num_word_map.items():
-        text = text.replace(num, f' {word} ')
+
+    # Language-specific number to word mapping
+    if language == 'de':
+        num_word_map = {
+            '0': 'null', '1': 'eins', '2': 'zwei', '3': 'drei', '4': 'vier',
+            '5': 'fünf', '6': 'sechs', '7': 'sieben', '8': 'acht', '9': 'neun'
+        }
+    elif language == 'en':
+        num_word_map = {
+            '0': 'zero', '1': 'one', '2': 'two', '3': 'three', '4': 'four',
+            '5': 'five', '6': 'six', '7': 'seven', '8': 'eight', '9': 'nine'
+        }
+    else:
+        num_word_map = {}
+
+    # Replace standalone numbers with words
+    def replace_number(match):
+        return ' '.join(num_word_map.get(digit, digit) for digit in match.group(0))
+
+    text = re.sub(r'\b\d+\b', replace_number, text)
+
+    # Normalize whitespace
     text = re.sub(r'\s+', ' ', text).strip()
-    return text.lower()
+    return text
 
 def convert_to_wav(file_path, target_sr=16000):
     file_name, file_ext = os.path.splitext(file_path)
@@ -95,10 +113,7 @@ def segment_audio_by_silence(audio, original_filename_no_ext, base_output_dir):
         })
     return segment_data
 
-def transcribe_and_segment(audio, audio_path, original_filename_no_ext, base_output_dir, segmentation_mode, model):
-    transcription_result = model.transcribe(audio_path, word_timestamps=True)
-    
-    # Group words into sentences
+def group_words_into_sentences(transcription_result):
     sentences = []
     current_sentence = []
     for segment in transcription_result['segments']:
@@ -107,30 +122,25 @@ def transcribe_and_segment(audio, audio_path, original_filename_no_ext, base_out
             if word['word'].strip().endswith(('.', '!', '?')):
                 sentences.append(current_sentence)
                 current_sentence = []
-    if current_sentence: # Add the last sentence if it doesn't end with punctuation
+    if current_sentence:
         sentences.append(current_sentence)
+    return sentences
 
-    # Group sentences into paragraphs if required
-    if segmentation_mode == 'paragraph':
-        paragraphs = []
-        current_paragraph = []
-        for i, sentence in enumerate(sentences):
-            current_paragraph.extend(sentence)
-            if i + 1 < len(sentences):
-                # Check gap between current sentence end and next sentence start
-                gap = sentences[i+1][0]['start'] - sentence[-1]['end']
-                if gap > 1.5: # Paragraph break if gap is > 1.5 seconds
-                    paragraphs.append(current_paragraph)
-                    current_paragraph = []
-        if current_paragraph:
-            paragraphs.append(current_paragraph)
-        # The final segments are the paragraphs
-        final_segments = paragraphs
-    else: # 'sentence' or 'paragraph'
-        # The final segments are the sentences
-        final_segments = sentences
+def group_sentences_into_paragraphs(sentences):
+    paragraphs = []
+    current_paragraph = []
+    for i, sentence in enumerate(sentences):
+        current_paragraph.extend(sentence)
+        if i + 1 < len(sentences):
+            gap = sentences[i+1][0]['start'] - sentence[-1]['end']
+            if gap > 1.5:
+                paragraphs.append(current_paragraph)
+                current_paragraph = []
+    if current_paragraph:
+        paragraphs.append(current_paragraph)
+    return paragraphs
 
-    # Create segment data from the final segments (sentences or paragraphs)
+def create_segments_from_transcription(audio, final_segments, original_filename_no_ext, base_output_dir):
     segment_data = []
     wavs_output_dir = os.path.join(base_output_dir, WAVS_SUBDIR)
     os.makedirs(wavs_output_dir, exist_ok=True)
@@ -154,13 +164,25 @@ def transcribe_and_segment(audio, audio_path, original_filename_no_ext, base_out
         })
     return segment_data
 
+def transcribe_and_segment(audio, audio_path, original_filename_no_ext, base_output_dir, segmentation_mode, model):
+    transcription_result = model.transcribe(audio_path, word_timestamps=True)
+    
+    sentences = group_words_into_sentences(transcription_result)
+    
+    if segmentation_mode == 'paragraph':
+        final_segments = group_sentences_into_paragraphs(sentences)
+    else:
+        final_segments = sentences
+
+    return create_segments_from_transcription(audio, final_segments, original_filename_no_ext, base_output_dir)
+
 # --- Metadata Saving ---
 
 def save_metadata_for_coqui(segment_data, tts_dataset_base_dir):
     metadata_file_path = os.path.join(tts_dataset_base_dir, METADATA_FILE)
     with open(metadata_file_path, 'a', newline='', encoding='utf-8') as f:
         for segment in segment_data:
-            cleaned_transcript = clean_transcription(segment["transcript"])
+            cleaned_transcript = clean_transcription(segment["transcript"], language='de')
             if cleaned_transcript:
                 f.write(f"{segment['segment_filename']}|{cleaned_transcript}\n")
 
@@ -178,7 +200,7 @@ def save_detailed_metadata(segment_data, tts_dataset_base_dir):
 
 # --- Main Processing Orchestrator ---
 
-def process_audio_file(file_path, base_output_dir, processing_mode="transcription", segmentation_mode="silence"):
+def process_audio_file(file_path, base_output_dir, model, processing_mode="transcription", segmentation_mode="silence"):
     original_filename_no_ext = os.path.splitext(os.path.basename(file_path))[0]
     os.makedirs(base_output_dir, exist_ok=True)
 
@@ -206,13 +228,13 @@ def process_audio_file(file_path, base_output_dir, processing_mode="transcriptio
         # Transcribe each segment individually
         for segment in silence_segments:
             try:
-                result = whisper.load_model("base").transcribe(segment["audio_file_path"])
+                result = model.transcribe(segment["audio_file_path"])
                 segment["transcript"] = result["text"]
             except Exception as e:
                 segment["error"] += f"Transcription failed: {e}; "
         segment_data = silence_segments
     else: # 'sentence' or 'paragraph'
-        segment_data = transcribe_and_segment(audio, converted_file, original_filename_no_ext, base_output_dir, segmentation_mode)
+        segment_data = transcribe_and_segment(audio, converted_file, original_filename_no_ext, base_output_dir, segmentation_mode, model)
 
     if not segment_data:
         if converted_file != file_path: os.remove(converted_file)
@@ -240,6 +262,7 @@ if __name__ == '__main__':
     import sys
     if len(sys.argv) > 1:
         file_to_process = sys.argv[1]
-        process_audio_file(file_to_process, "temp_tts_dataset")
+        model = whisper.load_model("base")
+        process_audio_file(file_to_process, "temp_tts_dataset", model)
     else:
         print("Bitte geben Sie den Pfad zur Audiodatei an.")

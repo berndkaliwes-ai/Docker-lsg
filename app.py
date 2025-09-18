@@ -2,6 +2,7 @@ import os
 from flask import Flask, request, redirect, url_for, render_template, send_from_directory
 from werkzeug.utils import secure_filename
 import main
+import whisper
 
 UPLOAD_FOLDER = 'uploads'
 # RESULTS_FOLDER is now managed by main.py's TTS_DATASET_DIR
@@ -11,6 +12,9 @@ ALLOWED_EXTENSIONS = {'opus', 'mp3', 'wav', 'm4a', 'aac', 'flac'}
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['RESULTS_FOLDER'] = main.TTS_DATASET_DIR # Use the TTS_DATASET_DIR from main.py
+
+# Load the Whisper model once
+model = whisper.load_model("base")
 
 def allowed_file(filename):
     return '.' in filename and \
@@ -41,6 +45,7 @@ def upload_file():
                 result = main.process_audio_file(
                     upload_path, 
                     app.config['RESULTS_FOLDER'], 
+                    model, # Pass the loaded model
                     processing_mode, 
                     segmentation_mode
                 )

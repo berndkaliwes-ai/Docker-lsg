@@ -345,3 +345,85 @@ def test_process_audio_file_transcription_error_handling(monkeypatch, test_asset
         reader = csv.DictReader(f)
         first_row = next(reader)
         assert "Transcription failed: mocked transcription error" in first_row["error"]
+
+def test_group_words_into_sentences(mock_whisper_result):
+    sentences = main.group_words_into_sentences(mock_whisper_result)
+    assert len(sentences) == 5
+    assert "Sentence" in sentences[0][0]['word']
+    assert "four." in sentences[4][-1]['word']
+
+def test_group_sentences_into_paragraphs(mock_whisper_result):
+    sentences = main.group_words_into_sentences(mock_whisper_result)
+    paragraphs = main.group_sentences_into_paragraphs(sentences)
+    assert len(paragraphs) == 2
+    assert "Sentence one. Sentence two? Sentence three!" in " ".join([w['word'] for s in paragraphs[0] for w in s])
+    assert "A long pause here. And sentence four." in " ".join([w['word'] for s in paragraphs[1] for w in s])
+
+def test_create_segments_from_transcription(tmp_path):
+    audio = AudioSegment.silent(duration=10000) # 10 seconds of silence
+    final_segments = [
+        [{'word': 'Hello', 'start': 0.0, 'end': 0.5}, {'word': 'world', 'start': 0.6, 'end': 1.0}],
+        [{'word': 'How', 'start': 2.0, 'end': 2.3}, {'word': 'are', 'start': 2.4, 'end': 2.5}, {'word': 'you', 'start': 2.6, 'end': 2.8}]
+    ]
+    original_filename_no_ext = "test_audio"
+    base_output_dir = tmp_path / "results"
+    segment_data = main.create_segments_from_transcription(audio, final_segments, original_filename_no_ext, base_output_dir)
+
+    assert len(segment_data) == 2
+    assert segment_data[0]["transcript"] == "Hello world"
+    assert segment_data[1]["transcript"] == "How are you"
+    assert os.path.exists(os.path.join(base_output_dir, main.WAVS_SUBDIR, "test_audio_segment_0001.wav"))
+
+def test_save_metadata_for_coqui(tmp_path):
+    tts_dataset_base_dir = tmp_path / "tts_dataset"
+    os.makedirs(tts_dataset_base_dir, exist_ok=True)
+    segment_data = [
+        {"segment_filename": "seg1.wav", "transcript": "Hello world.", "error": ""},
+        {"segment_filename": "seg2.wav", "transcript": "This is a test.", "error": ""}
+    ]
+    main.save_metadata_for_coqui(segment_data, str(tts_dataset_base_dir))
+    
+    metadata_path = os.path.join(tts_dataset_base_dir, main.METADATA_FILE)
+    assert os.path.exists(metadata_path)
+    with open(metadata_path, 'r', encoding='utf-8') as f:
+        content = f.readlines()
+    assert "seg1.wav|hello world\n" in content
+    assert "seg2.wav|this is a test\n" in content
+
+def test_save_detailed_metadata(tmp_path):
+    tts_dataset_base_dir = tmp_path / "tts_dataset"
+    os.makedirs(tts_dataset_base_dir, exist_ok=True)
+    segment_data = [
+        {"segment_filename": "seg1.wav", "transcript": "Hello world.", "start_time": 0.0, "end_time": 1.0, "duration": 1.0, "error": "", "snr_db": 35.0, "clipping_percentage": 0.1},
+        {"segment_filename": "seg2.wav", "transcript": "This is a test.", "start_time": 1.5, "end_time": 2.5, "duration": 1.0, "error": "", "snr_db": 30.0, "clipping_percentage": 0.0}
+    ]
+    main.save_detailed_metadata(segment_data, str(tts_dataset_base_dir))
+
+    metadata_path = os.path.join(tts_dataset_base_dir, main.DETAILED_METADATA_FILE)
+    assert os.path.exists(metadata_path)
+    with open(metadata_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+    assert len(rows) == 2
+    assert rows[0]["segment_filename"] == "seg1.wav"
+    assert float(rows[0]["snr_db"]) == 35.0
+
+def test_create_zip_archive_of_tts_dataset(tmp_path):
+    tts_dataset_base_dir = tmp_path / "tts_dataset"
+    os.makedirs(tts_dataset_base_dir / "wavs", exist_ok=True)
+    (tts_dataset_base_dir / "wavs" / "audio.wav").write_text("dummy audio")
+    (tts_dataset_base_dir / "metadata.txt").write_text("dummy metadata")
+
+    zip_file_path = main.create_zip_archive_of_tts_dataset(str(tts_dataset_base_dir))
+    assert zip_file_path is not None
+    assert os.path.exists(zip_file_path)
+    assert zip_file_path.endswith(".zip")
+
+    # Clean up the created zip file
+    os.remove(zip_file_path)
+    shutil.rmtree(tts_dataset_base_dir) # Remove the directory as well
+
+def test_create_zip_archive_of_tts_dataset_non_existent_dir(tmp_path):
+    non_existent_dir = tmp_path / "non_existent"
+    zip_file_path = main.create_zip_archive_of_tts_dataset(str(non_existent_dir))
+    assert zip_file_path is None
