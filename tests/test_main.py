@@ -209,7 +209,8 @@ def test_process_audio_file_no_segments_generated(monkeypatch, tmp_path):
     dummy_mp3_path.write_text("dummy mp3 content")
 
     mock_wav_path = tmp_path / "test_converted.wav"
-    mock_wav_path.write_text("dummy wav content")
+    # Create a valid empty WAV file
+    AudioSegment.silent(duration=100).export(mock_wav_path, format="wav")
 
     monkeypatch.setattr(main, 'convert_to_wav', lambda x: str(mock_wav_path))
     monkeypatch.setattr(main, 'analyze_quality', lambda x: {'snr_db': 30, 'clipping_percentage': 0})
@@ -294,7 +295,8 @@ def test_process_audio_file_successful_conversion_cleanup(monkeypatch, tmp_path)
 
     # Mock convert_to_wav to return a path different from original (simulating conversion)
     mock_wav_path = tmp_path / "test_converted.wav"
-    mock_wav_path.write_text("dummy wav content")
+    # Create a valid empty WAV file
+    AudioSegment.silent(duration=100).export(mock_wav_path, format="wav")
     monkeypatch.setattr(main, 'convert_to_wav', lambda x, target_sr=16000: str(mock_wav_path))
 
     # Mock analyze_quality to return a passing quality metric
