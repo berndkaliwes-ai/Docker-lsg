@@ -94,8 +94,8 @@
                 {% if final_zip %}
                 <div class="mt-4">
                     <h4>Download TTS Dataset</h4>
-                    <a href="{{ url_for('download_file', filename=final_zip) }}" class="btn btn-primary">Download {{ final_zip }}</a>
-                    <small class="text-muted d-block mt-2">This zip contains all processed audio segments and the metadata.txt file, formatted for Coqui TTS training.</small>
+                    html
+<a href="{{ url_for('download_file', session_id=session_id, filename=final_zip) }}" class="btn btn-primary">Download {{ final_zip }}</a>
                 </div>
                 {% endif %}
 

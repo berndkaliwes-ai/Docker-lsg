@@ -1,7 +1,8 @@
+flask
+whisper
 pydub
-openai-whisper
 librosa
+noisereduce
+scipy
 soundfile
-Flask
-pytest
-pytest-cov
+numpy

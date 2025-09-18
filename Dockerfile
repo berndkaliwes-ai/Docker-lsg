@@ -1,32 +1,40 @@
-FROM python:3.10-slim
+# syntax=docker/dockerfile:1
 
-# Install dependencies for downloading and extracting ffmpeg
-RUN apt-get update && apt-get install -y curl tar xz-utils && apt-get clean
+# Stufe 1: Der "Builder"
+# KORRIGIERT: 'buster' durch das neuere 'bookworm' ersetzt
+FROM python:3.8.18-slim-bookworm AS builder
 
-# Download and install a static ffmpeg build
-RUN curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o ffmpeg.tar.xz && \
-    tar -xf ffmpeg.tar.xz && \
-    mv ffmpeg-*-amd64-static/ffmpeg /usr/bin/ffmpeg && \
-    mv ffmpeg-*-amd64-static/ffprobe /usr/bin/ffprobe && \
-    rm -rf ffmpeg.tar.xz ffmpeg-*-amd64-static
+# System-Abhängigkeiten für Audioverarbeitung hinzufügen
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    ffmpeg \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix="/install" -r requirements.txt
+
+# Stufe 2: Das finale, schlanke Image
+# KORRIGIERT: 'buster' durch das neuere 'bookworm' ersetzt
+FROM python:3.8.18-slim-bookworm AS final
+
+# Laufzeit-Abhängigkeiten ebenfalls installieren
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --gid 1001 appuser && \
+    useradd --uid 1001 --gid 1001 -m appuser
+
 WORKDIR /app
 
-# Copy requirements and install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt && rm -rf /root/.cache/pip
+COPY --from=builder /install /usr/local
+COPY . .
 
-# Download Whisper model
-RUN python -c "import whisper; whisper.load_model('base')"
+RUN chown -R appuser:appuser /app
+USER appuser
 
-# Copy application code
-COPY main.py .
-COPY app.py .
-COPY templates templates
-
-# Expose port
 EXPOSE 5000
-
-# Command to run the application
-CMD ["python", "app.py"]
+CMD [ "python", "-m" , "flask", "run", "--host=0.0.0.0"]
