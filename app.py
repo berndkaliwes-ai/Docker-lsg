@@ -45,10 +45,8 @@ def upload_file():
                     segmentation_mode
                 )
                 
-                if result["status"] == "success":
-                    processed_files_info.append({"name": filename, "status": "Processed"})
-                else:
-                    processed_files_info.append({"name": filename, "status": f"Failed: {result['message']}"})
+                # Store the full result dictionary
+                processed_files_info.append(result)
 
         final_zip_path = main.create_zip_archive_of_tts_dataset(app.config['RESULTS_FOLDER'])
         

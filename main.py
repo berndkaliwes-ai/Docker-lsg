@@ -95,8 +95,7 @@ def segment_audio_by_silence(audio, original_filename_no_ext, base_output_dir):
         })
     return segment_data
 
-def transcribe_and_segment(audio, audio_path, original_filename_no_ext, base_output_dir, segmentation_mode):
-    model = whisper.load_model("base")
+def transcribe_and_segment(audio, audio_path, original_filename_no_ext, base_output_dir, segmentation_mode, model):
     transcription_result = model.transcribe(audio_path, word_timestamps=True)
     
     # Group words into sentences
@@ -205,10 +204,9 @@ def process_audio_file(file_path, base_output_dir, processing_mode="transcriptio
     if segmentation_mode == 'silence':
         silence_segments = segment_audio_by_silence(audio, original_filename_no_ext, base_output_dir)
         # Transcribe each segment individually
-        model = whisper.load_model("base")
         for segment in silence_segments:
             try:
-                result = model.transcribe(segment["audio_file_path"])
+                result = whisper.load_model("base").transcribe(segment["audio_file_path"])
                 segment["transcript"] = result["text"]
             except Exception as e:
                 segment["error"] += f"Transcription failed: {e}; "
